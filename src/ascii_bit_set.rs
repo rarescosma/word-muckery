@@ -7,6 +7,7 @@ pub struct AsciiBitSet {
 }
 
 impl AsciiBitSet {
+    #[cfg(test)]
     pub fn set_letter(&mut self, l: u8) {
         self.set |= 1 << l
     }
@@ -25,14 +26,16 @@ impl AsciiBitSet {
         (self.set >> letter) & 1 == 1
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn intersect(&self, set: &Self) -> bool {
         self.set & set.set != 0
     }
 }
 
+#[cfg(test)]
 mod tests {
-    use crate::AsciiBitSet;
+    use super::AsciiBitSet;
 
     #[test]
     fn test_from_bytes() {

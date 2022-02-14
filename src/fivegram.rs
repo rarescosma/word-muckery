@@ -8,7 +8,7 @@
 **/
 #[derive(Default, Copy, Clone)]
 pub struct Fivegram {
-    word: u32
+    word: u32,
 }
 
 impl Fivegram {
@@ -30,21 +30,22 @@ impl Fivegram {
         res
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn partial_match(&self, pattern: &Self) -> bool {
         self.word & pattern.word == pattern.word
     }
 }
 
+#[cfg(test)]
 mod tests {
-    use crate::Fivegram;
+    use super::Fivegram;
 
     #[test]
     fn test_from_bytes() {
         let fg = Fivegram::from_bytes("abcde".as_bytes());
 
-        assert_eq!(fg.word,
-            0b00_00000_00101_00100_00011_00010_00001);
+        assert_eq!(fg.word, 0b00_00000_00101_00100_00011_00010_00001);
     }
 
     #[test]
