@@ -21,10 +21,10 @@ impl Fivegram {
         (self.word >> (pos * 5)) & 0b11111 == (l + 1) as u32
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_letters(bytes: &[u8]) -> Self {
         let mut res = Self::default();
         for (i, b) in bytes.iter().enumerate() {
-            res.set_letter(*b, i);
+            res.set_letter(b - b'a', i);
         }
 
         res
@@ -43,14 +43,14 @@ mod tests {
 
     #[test]
     fn test_from_bytes() {
-        let fg = Fivegram::from_bytes("abcde".as_bytes());
+        let fg = Fivegram::from_letters("abcde".as_bytes());
 
         assert_eq!(fg.word, 0b00_00000_00101_00100_00011_00010_00001);
     }
 
     #[test]
     fn test_has_letter() {
-        let fg = Fivegram::from_bytes("abcde".as_bytes());
+        let fg = Fivegram::from_letters("abcde".as_bytes());
 
         assert!(fg.has_letter(b'a', 0));
         assert!(fg.has_letter(b'b', 1));
@@ -61,23 +61,23 @@ mod tests {
 
     #[test]
     fn test_matches_full() {
-        let l = Fivegram::from_bytes("abcde".as_bytes());
-        let r = Fivegram::from_bytes("abcde".as_bytes());
+        let l = Fivegram::from_letters("abcde".as_bytes());
+        let r = Fivegram::from_letters("abcde".as_bytes());
 
         assert!(l.partial_match(&r));
     }
 
     #[test]
     fn test_matches_prefix() {
-        let l = Fivegram::from_bytes("abcde".as_bytes());
-        let r = Fivegram::from_bytes("abc".as_bytes());
+        let l = Fivegram::from_letters("abcde".as_bytes());
+        let r = Fivegram::from_letters("abc".as_bytes());
 
         assert!(l.partial_match(&r));
     }
 
     #[test]
     fn test_matches_with_holes() {
-        let l = Fivegram::from_bytes("abcde".as_bytes());
+        let l = Fivegram::from_letters("abcde".as_bytes());
         let mut r = Fivegram::default();
         r.set_letter(b'b', 1);
         r.set_letter(b'd', 3);

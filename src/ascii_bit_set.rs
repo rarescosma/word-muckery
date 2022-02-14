@@ -12,10 +12,10 @@ impl AsciiBitSet {
         self.set |= 1 << l
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_letters(bytes: &[u8]) -> Self {
         let mut set = Self::default();
         for b in bytes {
-            set.set |= 1 << b;
+            set.set |= 1 << (b - b'a');
         }
 
         set
@@ -39,13 +39,13 @@ mod tests {
 
     #[test]
     fn test_from_bytes() {
-        let s = AsciiBitSet::from_bytes("abcde".as_bytes());
+        let s = AsciiBitSet::from_letters("abcde".as_bytes());
         assert_eq!(s.set, 0b11111);
 
-        let s = AsciiBitSet::from_bytes("zyxwv".as_bytes());
+        let s = AsciiBitSet::from_letters("zyxwv".as_bytes());
         assert_eq!(s.set, 0b0011_1110_0000_0000_0000_0000_0000);
 
-        let s = AsciiBitSet::from_bytes("abcdefghijklmnopqrstuvwxyz".as_bytes());
+        let s = AsciiBitSet::from_letters("abcdefghijklmnopqrstuvwxyz".as_bytes());
         assert_eq!(s.set, 0b0011_1111_1111_1111_1111_1111_1111);
     }
 
@@ -63,8 +63,8 @@ mod tests {
 
     #[test]
     fn test_intersect() {
-        let l = AsciiBitSet::from_bytes("abcde".as_bytes());
-        let r = AsciiBitSet::from_bytes("bdz".as_bytes());
+        let l = AsciiBitSet::from_letters("abcde".as_bytes());
+        let r = AsciiBitSet::from_letters("bdz".as_bytes());
 
         assert!(l.intersect(&r));
     }
