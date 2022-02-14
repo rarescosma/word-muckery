@@ -2,17 +2,13 @@ mod ascii_bit_set;
 mod fivegram;
 
 use ascii_bit_set::AsciiBitSet;
+use bitvec_simd::BitVec;
 use fivegram::Fivegram;
-use hashbrown::HashMap;
-use itertools::{iproduct, Itertools};
+use itertools::iproduct;
 use lazy_static::lazy_static;
 use rayon::prelude::*;
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
 
-type WordIndex = usize;
-type WordSet = Vec<WordIndex>;
-type WordSlice<'a> = &'a [WordIndex];
+type WordBitMap = BitVec;
 type Letter = u8;
 type Word = [Letter; 5];
 type Pos = u8;
@@ -20,50 +16,53 @@ type Pattern = [Predicate; 5];
 
 const PATTERN_NUM: usize = 3usize.pow(5_u32);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum LetterState {
     Absent,
     Present,
     AtPos,
 }
 
-#[derive(Debug, Copy, Clone, Eq)]
-struct Predicate {
+#[derive(Debug, Copy, Clone)]
+pub struct Predicate {
     letter: Letter,
     state: LetterState,
     pos: Pos,
 }
 
-impl Hash for Predicate {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u8(self.state as u8 & 0b11);
-        state.write_u8(self.pos << 2 & 0b11100);
-        state.write_u16((self.letter as u16) << 5);
-    }
-}
-
-impl PartialEq<Self> for Predicate {
-    fn eq(&self, other: &Self) -> bool {
-        self.pos == other.pos && self.letter == other.letter && self.state == other.state
-    }
-}
-
 impl Predicate {
-    fn apply(&self, ws: impl Iterator<Item = WordIndex>) -> WordSet {
-        ws.filter(|&idx| {
-            let ascii_bit_set = ASCII_BIT_SETS[idx];
-            let fivegram = FIVEGRAMS[idx];
+    fn cached_bitmap(&self) -> &WordBitMap {
+        PRED_BIN[self.index()].as_ref().unwrap()
+    }
 
-            match self.state {
-                LetterState::Absent => !ascii_bit_set.has_letter(self.letter),
-                LetterState::Present => {
-                    ascii_bit_set.has_letter(self.letter)
-                        && !fivegram.has_letter(self.letter, self.pos as usize)
-                }
-                LetterState::AtPos => fivegram.has_letter(self.letter, self.pos as usize),
+    fn index(&self) -> usize {
+        let mut res = (self.state as u8 & 0b11 | (self.pos & 0b111) << 2) as u16;
+        res |= (((self.letter - b'a') & 0b11111) as u16) << 5;
+        res as usize
+    }
+
+    fn matches_index(&self, idx: usize) -> bool {
+        let ascii_bit_set = ASCII_BIT_SETS[idx];
+        let fivegram = FIVEGRAMS[idx];
+
+        match self.state {
+            LetterState::Absent => !ascii_bit_set.has_letter(self.letter),
+            LetterState::Present => {
+                ascii_bit_set.has_letter(self.letter)
+                    && !fivegram.has_letter(self.letter, self.pos as usize)
             }
-        })
-        .collect()
+            LetterState::AtPos => fivegram.has_letter(self.letter, self.pos as usize),
+        }
+    }
+
+    fn as_bitmap(&self) -> WordBitMap {
+        let mut ret = BitVec::zeros(*WORD_NUM);
+        for idx in 0..*WORD_NUM {
+            if self.matches_index(idx) {
+                ret.set(idx, true);
+            }
+        }
+        ret
     }
 }
 
@@ -76,42 +75,27 @@ const ALL_POSITIONS: [Pos; 5] = [0, 1, 2, 3, 4];
 
 lazy_static! {
     static ref ALL_LETTERS: [Letter; 26] = (0..26u8).collect::<Vec<_>>().try_into().unwrap();
-    static ref ALL_PREDICATES: [Predicate; 390] = {
-        let v: Vec<Predicate> =
-            iproduct!(ALL_LETTERS.iter(), ALL_STATES.iter(), ALL_POSITIONS.iter())
-                .map(|(&letter, &state, &pos)| Predicate { letter, state, pos })
-                .collect();
-        v.try_into().unwrap()
-    };
-    static ref WORDS: Vec<Word> = include_str!("dict.txt").lines().map(into_word).collect();
-    static ref FIVEGRAMS: Vec<Fivegram> =
-        { WORDS.iter().map(|w| Fivegram::from_bytes(w)).collect() };
+    static ref WORDS: Vec<Word> = include_str!("dict.txt")
+        .lines()
+        .flat_map(|l| l.as_bytes().try_into())
+        .collect();
+    static ref FIVEGRAMS: Vec<Fivegram> = WORDS.iter().map(|w| Fivegram::from_letters(w)).collect();
     static ref ASCII_BIT_SETS: Vec<AsciiBitSet> =
-        { WORDS.iter().map(|w| AsciiBitSet::from_bytes(w)).collect() };
-    static ref WORD_NUM: f32 = WORDS.len() as f32;
+        WORDS.iter().map(|w| AsciiBitSet::from_letters(w)).collect();
+    static ref WORD_NUM: usize = WORDS.len();
+    static ref WORD_NUM_F: f32 = WORDS.len() as f32;
 }
 
 lazy_static! {
-    static ref PREDICATE_BINS: HashMap<Predicate, WordSet> = {
-        ALL_PREDICATES
-            .iter()
-            .map(|p| (*p, p.apply(0..WORDS.len())))
-            .collect()
-    };
-    static ref LAYER_ONE: HashMap<(Predicate, Predicate), WordSet> = {
-        let v = ALL_PREDICATES
-            .iter()
-            .tuple_combinations()
-            .collect::<Vec<_>>();
+    static ref PRED_BIN: [Option<WordBitMap>; 1024] = {
+        let mut res = vec![None; 1024];
 
-        v.into_par_iter()
-            .flat_map(|(p0, p1)| {
-                let res = intersect(&PREDICATE_BINS[p0], &PREDICATE_BINS[p1]);
-                [((*p0, *p1), res.clone()), ((*p1, *p0), res)]
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect()
+        for p in iproduct!(ALL_LETTERS.iter(), ALL_STATES.iter(), ALL_POSITIONS.iter())
+            .map(|(&letter, &state, &pos)| Predicate { letter, state, pos })
+        {
+            res[p.index()] = Some(p.as_bitmap());
+        }
+        res.try_into().unwrap()
     };
     static ref ALL_PATTERNS: [[LetterState; 5]; PATTERN_NUM] = {
         let mut res = [[LetterState::Absent; 5]; PATTERN_NUM];
@@ -130,93 +114,63 @@ lazy_static! {
     };
 }
 
-fn into_word<T: AsRef<str>>(t: T) -> Word {
-    let v: Vec<Letter> = t.as_ref().chars().map(|c| (c as u8 - b'a')).collect();
-    v.try_into().unwrap()
-}
-
-fn to_str(w: Word) -> String {
-    let mut res = String::default();
-    w.iter().for_each(|x| res.push((*x + b'a') as char));
-    res
+fn to_str(w: &Word) -> String {
+    String::from_utf8_lossy(w).to_string()
 }
 
 fn word_patterns(w: &Word) -> Vec<Pattern> {
     ALL_PATTERNS
         .iter()
-        .map(|x| {
-            let v: Vec<Predicate> = x
-                .iter()
-                .enumerate()
-                .map(|(pos, &state)| Predicate {
-                    letter: w[pos],
+        .map(|states| {
+            let mut pos = 0;
+            states.map(|state| {
+                let p = Predicate {
+                    letter: w[pos as usize] - b'a',
                     state,
-                    pos: pos as u8,
-                })
-                .collect();
-            v.try_into().unwrap()
+                    pos,
+                };
+                pos += 1;
+                p
+            })
         })
         .collect()
 }
 
-fn intersect(w0: WordSlice, w1: WordSlice) -> WordSet {
-    let (i_max, j_max) = (w0.len(), w1.len());
-    let (mut i, mut j) = (0, 0);
-
-    let mut res = Vec::with_capacity(1024);
-    while i < i_max && j < j_max {
-        match w0[i].cmp(&w1[j]) {
-            Ordering::Equal => {
-                res.push(w0[i]);
-                i += 1;
-                j += 1;
-            }
-            Ordering::Less => {
-                i += 1;
-            }
-            Ordering::Greater => {
-                j += 1;
-            }
-        }
+#[inline]
+fn intersect(pattern: &Pattern) -> WordBitMap {
+    let mut res = pattern[0].cached_bitmap().clone();
+    for pred in &pattern[1..] {
+        res.and_inplace(pred.cached_bitmap())
     }
     res
 }
 
-fn entropy(bins: Vec<usize>) -> f32 {
-    bins.into_iter()
-        .map(|b| b as f32)
-        .map(|b| -b * (b / *WORD_NUM).log2())
+fn entropy(word: &Word) -> f32 {
+    let patterns = word_patterns(word);
+    patterns
+        .into_par_iter()
+        .filter_map(|ref pat| match intersect(pat).count_ones() {
+            x if x > 0 => Some(x as f32),
+            _ => None,
+        })
+        .map(|b| -b * (b / *WORD_NUM_F).log2())
         .sum::<f32>()
-        / *WORD_NUM
+        / *WORD_NUM_F
 }
 
 fn main() {
     let now = std::time::Instant::now();
 
-    let mut res = Vec::<(String, f32)>::default();
+    let mut res: Vec<(Word, f32)> = WORDS
+        .clone()
+        .into_par_iter()
+        .map(|w| (w, entropy(&w)))
+        .collect();
 
-    for word in WORDS.iter() {
-        let patterns = word_patterns(word);
-        let _entropy = entropy(
-            patterns
-                .into_par_iter()
-                .flat_map(|pat| {
-                    let partial_0 = &LAYER_ONE[&(pat[0], pat[1])];
-                    let partial_1 = &LAYER_ONE[&(pat[3], pat[4])];
-                    let partial_2 = &LAYER_ONE[&(pat[1], pat[2])];
-                    let bin_len = intersect(&intersect(partial_0, partial_1), partial_2).len();
-                    if bin_len > 0 {
-                        Some(bin_len)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>(),
-        );
-        res.push((to_str(*word), _entropy));
-    }
     res.sort_unstable_by(|w0, w1| w1.1.partial_cmp(&w0.1).unwrap());
-    dbg!(&res[..15]);
+    for (word, i_e) in &res[..10] {
+        println!("E['{}'] = {}", to_str(word), i_e)
+    }
 
     let time = now.elapsed().as_millis();
     println!("Time: {}ms", time);
