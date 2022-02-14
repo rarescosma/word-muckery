@@ -1,3 +1,8 @@
+mod ascii_bit_set;
+mod fivegram;
+
+use fivegram::Fivegram;
+use ascii_bit_set::AsciiBitSet;
 use hashbrown::HashMap;
 use itertools::{iproduct, Itertools};
 use lazy_static::lazy_static;
@@ -46,19 +51,18 @@ impl PartialEq<Self> for Predicate {
 impl Predicate {
     fn apply(&self, ws: impl Iterator<Item = WordIndex>) -> WordSet {
         ws.filter(|&idx| {
-            let word = WORDS[idx];
+            let ascii_bit_set = ASCII_BIT_SETS[idx];
+            let fivegram = FIVEGRAMS[idx];
 
             match self.state {
-                LetterState::Absent => ALL_POSITIONS
-                    .iter()
-                    .all(|&p| word[p as usize] != self.letter),
+                LetterState::Absent =>
+                    !ascii_bit_set.has_letter(self.letter),
                 LetterState::Present => {
-                    ALL_POSITIONS
-                        .iter()
-                        .any(|&p| word[p as usize] == self.letter)
-                        && word[self.pos as usize] != self.letter
+                    ascii_bit_set.has_letter(self.letter)
+                        && !fivegram.has_letter(self.letter, self.pos as usize)
                 }
-                LetterState::AtPos => word[self.pos as usize] == self.letter,
+                LetterState::AtPos =>
+                    fivegram.has_letter(self.letter, self.pos as usize),
             }
         })
         .collect()
@@ -82,6 +86,18 @@ lazy_static! {
         v.try_into().unwrap()
     };
     static ref WORDS: Vec<Word> = include_str!("dict.txt").lines().map(into_word).collect();
+    static ref FIVEGRAMS: Vec<Fivegram> = {
+        WORDS
+            .iter()
+            .map(|w| Fivegram::from_bytes(w))
+            .collect()
+    };
+    static ref ASCII_BIT_SETS: Vec<AsciiBitSet> = {
+        WORDS
+            .iter()
+            .map(|w| AsciiBitSet::from_bytes(w))
+            .collect()
+    };
     static ref WORD_NUM: f32 = WORDS.len() as f32;
 }
 
